@@ -38,7 +38,7 @@ class VideoSRProcessor:
             print(f"Error output: {e.stderr.decode()}")
             raise
 
-    def process_video(self, input_path, output_path, temp_dir=None, max_workers=4, keep_audio=True, outscale=None, output_magnification=None):
+    def process_video(self, input_path, output_path, temp_dir=None, max_workers=4, keep_audio=True, outscale=None, output_magnification=None, progress_callback=None):
         """
         Process a video file: split -> upsample -> merge.
         
@@ -50,6 +50,7 @@ class VideoSRProcessor:
             keep_audio (bool): Whether to copy audio from source.
             outscale (float): Intermediate SR scale (magnification).
             output_magnification (float): Final scale relative to original.
+            progress_callback (callable): Optional callback for progress reporting.
         """
         if not os.path.exists(input_path):
             raise FileNotFoundError(f"Input video not found: {input_path}")
@@ -141,12 +142,21 @@ class VideoSRProcessor:
             output_dims_list = [output_dims] * len(inputs) if output_dims else None
             
             # Run batch processing
+            
+            def batch_progress(done, total):
+                if progress_callback:
+                    # SR is roughly 90% of work. We can map 0-100% of SR to maybe 10-95% of total task?
+                    # But for simplicity, let's just report "Processing frames: X%"
+                    pct = (done / total) * 100
+                    progress_callback(pct, f"Processing frames {done}/{total}")
+
             self.sr.process_batch(
                 inputs, 
                 outputs, 
                 max_workers=max_workers, 
                 outscale=outscale, 
-                output_dims_list=output_dims_list
+                output_dims_list=output_dims_list,
+                progress_callback=batch_progress
             )
             
             # 5. Merge

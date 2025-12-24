@@ -31,13 +31,14 @@ class OSSHandler:
         bucket = oss2.Bucket(auth, endpoint, self.config['bucket_name'])
         return bucket
 
-    def upload_file(self, local_path, oss_path):
+    def upload_file(self, local_path, oss_path, progress_callback=None):
         """
         Upload a single file to OSS.
         
         Args:
             local_path (str): Local file path.
             oss_path (str): Destination path in OSS.
+            progress_callback (callable): Function called with (consumed_bytes, total_bytes).
         """
         if not os.path.exists(local_path):
             print(f"File not found: {local_path}")
@@ -45,7 +46,12 @@ class OSSHandler:
             
         print(f"Uploading {local_path} to {oss_path}...")
         try:
-            oss2.resumable_upload(self.bucket, oss_path, local_path)
+            oss2.resumable_upload(
+                self.bucket, 
+                oss_path, 
+                local_path,
+                progress_callback=progress_callback
+            )
             print(f"Upload success: {oss_path}")
             return True
         except Exception as e:

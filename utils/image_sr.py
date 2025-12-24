@@ -108,7 +108,7 @@ class ImageSRProcessor:
             print(f"Error processing image: {error}")
             raise
 
-    def process_batch(self, input_paths, output_paths, max_workers=4, outscale=None, output_dims_list=None):
+    def process_batch(self, input_paths, output_paths, max_workers=4, outscale=None, output_dims_list=None, progress_callback=None):
         """
         Process a batch of images in parallel.
         
@@ -118,6 +118,7 @@ class ImageSRProcessor:
             max_workers (int): Number of worker threads.
             outscale (float): Scale factor for SR.
             output_dims_list (list): List of (w, h) tuples corresponding to each input. If None, no resize.
+            progress_callback (callable): Function called with (completed_count, total_count).
         """
         if len(input_paths) != len(output_paths):
             raise ValueError("Input and output lists must have same length")
@@ -130,8 +131,13 @@ class ImageSRProcessor:
             dims = output_dims_list[i] if output_dims_list else None
             tasks.append((input_paths[i], output_paths[i], dims))
         
-        print(f"Processing {len(tasks)} images with {max_workers} workers...")
+        total_tasks = len(tasks)
+        print(f"Processing {total_tasks} images with {max_workers} workers...")
         
+        completed_count = 0
+        if progress_callback:
+            progress_callback(0, total_tasks)
+
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [
                 executor.submit(self.process_image, inp, out, outscale, dims) 
@@ -141,6 +147,9 @@ class ImageSRProcessor:
             for i, future in enumerate(futures):
                 try:
                     future.result()
+                    completed_count += 1
+                    if progress_callback:
+                        progress_callback(completed_count, total_tasks)
                 except Exception as e:
                     print(f"Failed to process {input_paths[i]}: {e}")
         

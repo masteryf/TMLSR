@@ -114,6 +114,9 @@
                                     </div>
                                 </td>
                                 <td>
+                                    <button class="btn btn-sm btn-outline-primary me-1" @click="showDetails(task)">
+                                        Details
+                                    </button>
                                     <button v-if="['pending', 'processing'].includes(task.status)" 
                                             class="btn btn-sm btn-outline-danger"
                                             @click="cancelTask(task.task_id)">
@@ -129,8 +132,73 @@
                 </div>
             </div>
         </div>
+
+        <!-- Task Details Modal -->
+        <div class="modal fade" id="detailsModal" tabindex="-1" aria-hidden="true">
+            <div class="modal-dialog modal-lg">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Task Details</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body" v-if="selectedTask">
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <strong>Task ID:</strong> <span class="font-monospace">{{ selectedTask.task_id }}</span>
+                            </div>
+                            <div class="col-md-6 text-end">
+                                <strong>Status:</strong> 
+                                <span :class="'badge ' + getStatusClass(selectedTask.status)">{{ selectedTask.status }}</span>
+                            </div>
+                        </div>
+
+                        <h6 class="border-bottom pb-2">Stages</h6>
+                        <div class="list-group list-group-flush">
+                            <div v-for="stage in selectedTask.stages" :key="stage.name" class="list-group-item px-0">
+                                <div class="d-flex justify-content-between align-items-center mb-1">
+                                    <strong>{{ stage.name.toUpperCase() }}</strong>
+                                    <span :class="'badge ' + (stage.status === 'success' ? 'bg-success' : (stage.status === 'running' ? 'bg-primary' : 'bg-secondary'))">
+                                        {{ stage.status }}
+                                    </span>
+                                </div>
+                                
+                                <div class="d-flex justify-content-between small text-muted mb-1">
+                                    <span>{{ stage.detail || '-' }}</span>
+                                    <span>{{ stage.duration ? stage.duration + 's' : '' }}</span>
+                                </div>
+
+                                <div class="progress" style="height: 10px;" v-if="stage.status === 'running' || stage.status === 'success'">
+                                    <div class="progress-bar progress-bar-striped" 
+                                         :class="stage.status === 'running' ? 'progress-bar-animated' : 'bg-success'"
+                                         role="progressbar" 
+                                         :style="{ width: (stage.progress || (stage.status === 'success' ? 100 : 0)) + '%' }">
+                                    </div>
+                                </div>
+                            </div>
+                            <div v-if="selectedTask.stages.length === 0" class="text-muted text-center py-3">
+                                No stages recorded yet.
+                            </div>
+                        </div>
+
+                        <div v-if="selectedTask.output" class="mt-4 pt-3 border-top">
+                            <h6>Output</h6>
+                            <p>
+                                <a :href="selectedTask.output.url" target="_blank">{{ selectedTask.output.url }}</a>
+                                <span class="text-muted ms-2">({{ selectedTask.output.size_mb }} MB)</span>
+                            </p>
+                        </div>
+                        
+                        <div v-if="selectedTask.error" class="mt-4 pt-3 border-top">
+                            <h6 class="text-danger">Error</h6>
+                            <pre class="bg-light p-2 text-danger small">{{ selectedTask.error }}</pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         const { createApp } = Vue;
 
@@ -141,7 +209,9 @@
                     stats: { completed: 0, failed: 0 },
                     tasks: [],
                     lastUpdated: '-',
-                    timer: null
+                    timer: null,
+                    selectedTask: null,
+                    detailsModal: null
                 }
             },
             methods: {
@@ -152,6 +222,14 @@
                         this.stats = res.data.stats;
                         this.tasks = res.data.tasks;
                         this.lastUpdated = new Date().toLocaleTimeString();
+                        
+                        // Update selected task if open
+                        if (this.selectedTask) {
+                            const updated = this.tasks.find(t => t.task_id === this.selectedTask.task_id);
+                            if (updated) {
+                                this.selectedTask = updated;
+                            }
+                        }
                     } catch (err) {
                         console.error("Failed to fetch stats", err);
                     }
@@ -178,6 +256,13 @@
                     } catch (err) {
                         alert('Failed to cancel task: ' + (err.response?.data?.detail || err.message));
                     }
+                },
+                showDetails(task) {
+                    this.selectedTask = task;
+                    if (!this.detailsModal) {
+                        this.detailsModal = new bootstrap.Modal(document.getElementById('detailsModal'));
+                    }
+                    this.detailsModal.show();
                 }
             },
             mounted() {

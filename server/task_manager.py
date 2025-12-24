@@ -32,7 +32,37 @@ class TaskManager:
         self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
         self.worker_thread.start()
         
+        self._cleanup_stale_files()
+        
         print(f"TaskManager initialized with {self.max_workers} concurrent workers.")
+
+    def _cleanup_stale_files(self):
+        """Clean up stale temporary files from previous runs."""
+        print("Cleaning up stale temporary files...")
+        
+        # 1. Clean temp_tasks directory
+        if os.path.exists("temp_tasks"):
+            try:
+                shutil.rmtree("temp_tasks")
+                print("Removed stale 'temp_tasks' directory.")
+            except Exception as e:
+                print(f"Failed to remove 'temp_tasks': {e}")
+                
+        # 2. Clean VideoSRProcessor temp directories (temp_*)
+        # Look for directories matching temp_* in the current directory
+        # Be careful not to delete other temp folders if any
+        import glob
+        for temp_dir in glob.glob("temp_*"):
+            if os.path.isdir(temp_dir):
+                # Double check it looks like one of our temp dirs
+                # VideoSRProcessor: temp_{video_name}_{timestamp}
+                # We can just delete anything starting with temp_ that is a directory, 
+                # assuming we don't have other important folders starting with temp_
+                try:
+                    shutil.rmtree(temp_dir)
+                    print(f"Removed stale directory: {temp_dir}")
+                except Exception as e:
+                    print(f"Failed to remove '{temp_dir}': {e}")
 
     def create_task(self, request: TaskCreateRequest) -> str:
         task_id = str(uuid.uuid4()).replace('-', '')
@@ -157,7 +187,10 @@ class TaskManager:
                         task["error"] = str(e)
                         task["updated_at"] = datetime.utcnow().isoformat() + "Z"
 
-    def _update_stage(self, task_id, stage_name, status, duration=0.0):
+    def _update_stage(self, task_id, stage_name, status, duration=0.0, progress=None, detail=None):
+        # Round duration to 2 decimal places for cleaner output
+        duration = round(duration, 2)
+        
         with self.lock:
             task = self.tasks[task_id]
             # Check if stage exists, update it, or append
@@ -165,14 +198,21 @@ class TaskManager:
             for stage in task["stages"]:
                 if stage["name"] == stage_name:
                     stage["status"] = status
-                    stage["duration"] = duration
+                    if duration > 0:
+                        stage["duration"] = duration
+                    if progress is not None:
+                        stage["progress"] = progress
+                    if detail is not None:
+                        stage["detail"] = detail
                     found = True
                     break
             if not found:
                 task["stages"].append({
                     "name": stage_name,
                     "status": status,
-                    "duration": duration
+                    "duration": duration,
+                    "progress": progress if progress is not None else 0,
+                    "detail": detail if detail else ""
                 })
 
     def _execute_task(self, task_id):
@@ -187,15 +227,25 @@ class TaskManager:
         try:
             # 1. Download
             start_time = time.time()
+            self._update_stage(task_id, "download", "running", progress=0, detail="Starting download...")
+            
             local_input_filename = "input_video.mp4" if task_type == TaskType.VIDEO else "input_image.png"
             local_input = os.path.join(temp_dir, local_input_filename)
             
             print(f"Downloading {input_url} to {local_input}...")
-            self._download_file(input_url, local_input)
-            self._update_stage(task_id, "download", "success", time.time() - start_time)
+            
+            def download_progress(current, total):
+                if total > 0:
+                    pct = round((current / total) * 100, 1)
+                    self._update_stage(task_id, "download", "running", progress=pct, detail=f"{round(current/1024/1024, 1)}MB / {round(total/1024/1024, 1)}MB")
+
+            self._download_file(input_url, local_input, progress_callback=download_progress)
+            self._update_stage(task_id, "download", "success", duration=time.time() - start_time, progress=100, detail="Download complete")
             
             # 2. Process
             start_time = time.time()
+            self._update_stage(task_id, "process", "running", progress=0, detail="Initializing...")
+            
             local_output_filename = "output_video.mp4" if task_type == TaskType.VIDEO else "output_image.png"
             local_output = os.path.join(temp_dir, local_output_filename)
             
@@ -206,22 +256,23 @@ class TaskManager:
             processor = None
             if task_type == TaskType.VIDEO:
                 processor = VideoSRProcessor(gpu_id=gpu_id, scale=4) # Default scale 4, overridden by outscale
+                
+                def video_progress(pct, desc):
+                    self._update_stage(task_id, "process", "running", progress=round(pct, 1), detail=desc)
+                
                 processor.process_video(
                     input_path=local_input,
                     output_path=local_output,
                     outscale=outscale,
                     output_magnification=output_magnification,
-                    keep_audio=params.get("audio", True)
+                    keep_audio=params.get("audio", True),
+                    progress_callback=video_progress
                 )
             else:
                 processor = ImageSRProcessor(gpu_id=gpu_id, scale=4)
-                # Parse output_dims from magnification if needed, but processor handles it if we pass magnification logic
-                # Wait, ImageSRProcessor takes output_dims (w, h). 
-                # We need to calculate it if output_magnification is provided.
-                
+                # Parse output_dims from magnification if needed
                 dims = None
                 if output_magnification:
-                    img = requests.get(input_url, stream=True).raw # Or read local
                     # Actually we have local file now
                     import cv2
                     img_mat = cv2.imread(local_input)
@@ -241,31 +292,28 @@ class TaskManager:
             if processor:
                 processor.cleanup()
 
-            self._update_stage(task_id, "process", "success", time.time() - start_time)
+            self._update_stage(task_id, "process", "success", duration=time.time() - start_time, progress=100, detail="Processing complete")
             
             # 3. Upload
             start_time = time.time()
+            self._update_stage(task_id, "upload", "running", progress=0, detail="Starting upload...")
+            
             oss_filename = f"outputs/{task_id}/{local_output_filename}"
             
-            success = self.oss_handler.upload_file(local_output, oss_filename)
+            def upload_progress(consumed, total):
+                if total > 0:
+                    pct = round((consumed / total) * 100, 1)
+                    self._update_stage(task_id, "upload", "running", progress=pct, detail=f"{round(consumed/1024/1024, 1)}MB / {round(total/1024/1024, 1)}MB")
+
+            success = self.oss_handler.upload_file(local_output, oss_filename, progress_callback=upload_progress)
             if not success:
                 raise RuntimeError("Failed to upload to OSS")
                 
             # Construct OSS URL (Assuming public read or we need to generate signed url)
-            # For now, return the oss path or a constructed URL if endpoint is known
             bucket_name = self.oss_handler.config['bucket_name']
             endpoint = self.oss_handler.config['endpoint']
-            # Basic URL construction (works for public buckets)
-            # If private, we might need a signed URL, but let's assume standard access for now
-            # or return the path so client can sign it.
-            # The demo output showed: "https://oss-bucket/path/to/output.mp4"
-            
-            # Let's try to construct a valid URL
             if not endpoint.startswith("http"):
                 endpoint = "https://" + endpoint
-            
-            # format: https://bucket.endpoint/object
-            # cleanup endpoint if it contains protocol
             ep_host = endpoint.split("://")[-1]
             output_url = f"https://{bucket_name}.{ep_host}/{oss_filename}"
             
@@ -277,30 +325,56 @@ class TaskManager:
                     "size_mb": round(file_size, 2)
                 }
             
-            self._update_stage(task_id, "upload", "success", time.time() - start_time)
+            self._update_stage(task_id, "upload", "success", duration=time.time() - start_time, progress=100, detail="Upload complete")
 
         finally:
             # Cleanup
             if os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
 
-    def _download_file(self, url, local_path):
+    def _download_file(self, url, local_path, progress_callback=None):
         if url.startswith("http"):
             with requests.get(url, stream=True) as r:
                 r.raise_for_status()
+                total_length = r.headers.get('content-length')
+                
                 with open(local_path, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        f.write(chunk)
+                    if total_length is None: # no content length header
+                        f.write(r.content)
+                        if progress_callback:
+                            progress_callback(1, 1) # Just say done
+                    else:
+                        dl = 0
+                        total_length = int(total_length)
+                        for chunk in r.iter_content(chunk_size=8192):
+                            dl += len(chunk)
+                            f.write(chunk)
+                            if progress_callback:
+                                progress_callback(dl, total_length)
+                                
         elif url.startswith("file://"):
             src_path = url[7:]
             if os.path.exists(src_path):
+                # Fake progress for local copy
+                if progress_callback:
+                    size = os.path.getsize(src_path)
+                    progress_callback(0, size)
                 shutil.copy2(src_path, local_path)
+                if progress_callback:
+                    size = os.path.getsize(src_path)
+                    progress_callback(size, size)
             else:
                 raise FileNotFoundError(f"Local file not found: {src_path}")
         else:
             # Assume it's a local path if it exists
             if os.path.exists(url):
+                if progress_callback:
+                    size = os.path.getsize(url)
+                    progress_callback(0, size)
                 shutil.copy2(url, local_path)
+                if progress_callback:
+                    size = os.path.getsize(url)
+                    progress_callback(size, size)
             else:
                 raise ValueError(f"Unsupported URL scheme or file not found: {url}")
 
