@@ -252,6 +252,7 @@ class TaskManager:
             outscale = params.get("outscale")
             output_magnification = params.get("output_magnification")
             gpu_id = params.get("gpu_id", 0)
+            model_name = params.get("model", "realesr-animevideov3.pth")
 
             processor = None
             if task_type == TaskType.VIDEO:

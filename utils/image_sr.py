@@ -35,7 +35,7 @@ class ImageSRProcessor:
         
         if model_path is None:
             # Default to weights directory in the package
-            model_path = os.path.join(base_dir, 'weights', 'RealESRGAN_x4plus.pth')
+            model_path = os.path.join(base_dir, 'weights', 'realesr-animevideov3.pth')
         elif not os.path.exists(model_path):
             # Try looking in weights directory if provided path doesn't exist
             potential_path = os.path.join(base_dir, 'weights', model_path)
@@ -53,8 +53,25 @@ class ImageSRProcessor:
         if '6B' in os.path.basename(model_path):
             num_block = 6
             print("Detected 6B model, using num_block=6")
+        elif 'animevideov3' in os.path.basename(model_path):
+            num_in_ch = 3
+            num_out_ch = 3
+            num_feat = 64
+            num_block = 23 # x4plus has 23
+            num_grow_ch = 32
+            # realesr-animevideov3 is compact!
+            # It uses SRVGGNetCompact arch, not RRDBNet
+            # We need to import it.
+            try:
+                from basicsr.archs.srvgg_arch import SRVGGNetCompact
+            except ImportError:
+                 raise ImportError("Could not import SRVGGNetCompact. Make sure basicsr is installed correctly.")
             
-        self.model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=num_block, num_grow_ch=32, scale=scale)
+            self.model = SRVGGNetCompact(num_in_ch=3, num_out_ch=3, num_feat=64, num_conv=16, upscale=4, act_type='prelu')
+            print("Detected animevideov3 model, using SRVGGNetCompact arch")
+            
+        if not hasattr(self, 'model'):
+            self.model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=num_block, num_grow_ch=32, scale=scale)
         
         self.upsampler = RealESRGANer(
             scale=scale,

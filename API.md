@@ -28,6 +28,7 @@ Submit a new super-resolution task for video or image.
 |---|---|---|---|
 | `url` | string | Yes | The URL of the input file (OSS URL or accessible HTTP URL). |
 | `type` | string | No | `video` or `image`. Defaults to `video`. |
+| `model` | string | No | Model filename in `weights/` directory (e.g. `realesr-animevideov3.pth`). Defaults to `realesr-animevideov3.pth`. |
 | `outscale` | float | No | The super-resolution scale factor (e.g., 2, 4). Defaults to model scale (usually 4). |
 | `output_magnification` | float | No | The final output magnification relative to the original size. If provided, the result will be resized to this magnification after SR. |
 | `output_dims` | [int, int] | No | Specific output dimensions `[width, height]`. Overrides `output_magnification` if provided. |
