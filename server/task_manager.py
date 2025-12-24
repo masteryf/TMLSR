@@ -269,7 +269,7 @@ class TaskManager:
                     progress_callback=video_progress
                 )
             else:
-                processor = ImageSRProcessor(gpu_id=gpu_id, scale=4)
+                processor = ImageSRProcessor(gpu_id=gpu_id, scale=4, model_path=model_name)
                 # Parse output_dims from magnification if needed
                 dims = None
                 if output_magnification:

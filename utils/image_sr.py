@@ -31,19 +31,30 @@ class ImageSRProcessor:
         self.device = torch.device('cuda' if torch.cuda.is_available() and (gpu_id is None or gpu_id >= 0) else 'cpu')
         self.scale = scale
         
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        
         if model_path is None:
             # Default to weights directory in the package
-            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             model_path = os.path.join(base_dir, 'weights', 'RealESRGAN_x4plus.pth')
+        elif not os.path.exists(model_path):
+            # Try looking in weights directory if provided path doesn't exist
+            potential_path = os.path.join(base_dir, 'weights', model_path)
+            if os.path.exists(potential_path):
+                model_path = potential_path
             
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Model file not found at: {model_path}")
             
         print(f"Loading model from {model_path} on {self.device}...")
         
-        # Initialize model architecture (assuming x4plus for default)
-        # TODO: Make architecture configurable if needed
-        self.model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=scale)
+        # Initialize model architecture
+        # Auto-detect block number for anime 6B model
+        num_block = 23
+        if '6B' in os.path.basename(model_path):
+            num_block = 6
+            print("Detected 6B model, using num_block=6")
+            
+        self.model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=num_block, num_grow_ch=32, scale=scale)
         
         self.upsampler = RealESRGANer(
             scale=scale,

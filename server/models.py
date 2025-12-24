@@ -24,6 +24,7 @@ class TaskCreateRequest(BaseModel):
     acodec: Optional[str] = "aac"
     audio: bool = True
     gpu_id: int = 0
+    model: Optional[str] = Field("RealESRGAN_x4plus.pth", description="Model filename in weights directory")
     
     # Deprecated but kept for compatibility (ignored in logic if not needed, or mapped if possible)
     target: Optional[str] = None 
