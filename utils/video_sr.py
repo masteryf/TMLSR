@@ -117,8 +117,10 @@ class VideoSRProcessor:
                         audio_path
                     ]
                     self._run_ffmpeg(cmd_audio)
-                    if os.path.exists(audio_path):
+                    if os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
                         has_audio = True
+                    else:
+                        print("Audio file is empty or missing, proceeding without audio.")
                 except Exception as e:
                     print(f"Audio extraction warning: {e}")
 
@@ -158,6 +160,13 @@ class VideoSRProcessor:
                 output_dims_list=output_dims_list,
                 progress_callback=batch_progress
             )
+
+            # Check if we actually have output frames
+            out_files = sorted(glob.glob(os.path.join(frames_out, "*.png")))
+            if not out_files:
+                raise RuntimeError("No output frames were generated! Super-resolution process failed.")
+            if len(out_files) != len(frame_files):
+                print(f"Warning: Input frame count ({len(frame_files)}) != Output frame count ({len(out_files)})")
             
             # 5. Merge
             print("Step 4/4: Merging frames into video...")
