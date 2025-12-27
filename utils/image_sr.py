@@ -2,6 +2,7 @@ import os
 import cv2
 import torch
 import numpy as np
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from basicsr.archs.rrdbnet_arch import RRDBNet
 # Import from sibling package
@@ -83,6 +84,9 @@ class ImageSRProcessor:
             half=not fp32,
             gpu_id=gpu_id
         )
+        # Lock to prevent concurrent inference on the same upsampler instance
+        # This prevents race conditions in tiling/buffer management
+        self.lock = threading.Lock()
         print("Model loaded successfully.")
 
     def cleanup(self):
@@ -124,7 +128,9 @@ class ImageSRProcessor:
                 target_scale = outscale if outscale is not None else self.scale
                 
                 # SR Process
-                output, _ = self.upsampler.enhance(img, outscale=target_scale)
+                # Use lock to ensure thread safety during inference
+                with self.lock:
+                    output, _ = self.upsampler.enhance(img, outscale=target_scale)
                 
                 # Post-SR Resize if output_dims is specified
                 if output_dims is not None:
