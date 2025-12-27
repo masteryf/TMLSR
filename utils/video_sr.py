@@ -161,12 +161,30 @@ class VideoSRProcessor:
                 progress_callback=batch_progress
             )
 
-            # Check if we actually have output frames
+            # Check and repair missing frames to ensure FFmpeg sequence continuity
             out_files = sorted(glob.glob(os.path.join(frames_out, "*.png")))
             if not out_files:
                 raise RuntimeError("No output frames were generated! Super-resolution process failed.")
-            if len(out_files) != len(frame_files):
-                print(f"Warning: Input frame count ({len(frame_files)}) != Output frame count ({len(out_files)})")
+            
+            # Identify valid sample frame for fallback
+            sample_frame_path = out_files[0]
+            
+            missing_count = 0
+            for i, out_f in enumerate(outputs):
+                if not os.path.exists(out_f):
+                    missing_count += 1
+                    # print(f"Warning: Frame {os.path.basename(out_f)} missing. Repairing...")
+                    
+                    # Strategy: Copy previous > Next > Sample
+                    if i > 0 and os.path.exists(outputs[i-1]):
+                         shutil.copy2(outputs[i-1], out_f)
+                    elif i < len(outputs) - 1 and os.path.exists(outputs[i+1]):
+                         shutil.copy2(outputs[i+1], out_f)
+                    else:
+                         shutil.copy2(sample_frame_path, out_f)
+            
+            if missing_count > 0:
+                print(f"Repaired {missing_count} missing frames to ensure video continuity.")
             
             # 5. Merge
             print("Step 4/4: Merging frames into video...")
