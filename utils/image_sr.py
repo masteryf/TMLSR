@@ -97,7 +97,7 @@ class ImageSRProcessor:
 
     def process_image(self, img_input, output_path=None, outscale=None, output_dims=None):
         """
-        Process a single image.
+        Process a single image with retry mechanism.
         
         Args:
             img_input (str or np.ndarray): Input image path or numpy array (BGR).
@@ -108,33 +108,52 @@ class ImageSRProcessor:
         Returns:
             np.ndarray: Enhanced image if output_path is None, else None.
         """
-        if isinstance(img_input, str):
-            img = cv2.imread(img_input, cv2.IMREAD_UNCHANGED)
-            if img is None:
-                raise ValueError(f"Could not read image from {img_input}")
-        else:
-            img = img_input
+        max_retries = 3
+        last_error = None
+        
+        for attempt in range(max_retries):
+            try:
+                if isinstance(img_input, str):
+                    img = cv2.imread(img_input, cv2.IMREAD_UNCHANGED)
+                    if img is None:
+                        raise ValueError(f"Could not read image from {img_input}")
+                else:
+                    img = img_input
 
-        try:
-            # Use provided outscale or default to self.scale
-            target_scale = outscale if outscale is not None else self.scale
-            
-            # SR Process
-            output, _ = self.upsampler.enhance(img, outscale=target_scale)
-            
-            # Post-SR Resize if output_dims is specified
-            if output_dims is not None:
-                # cv2.resize expects (width, height)
-                output = cv2.resize(output, output_dims, interpolation=cv2.INTER_LANCZOS4)
-            
-            if output_path:
-                cv2.imwrite(output_path, output)
-                return None
-            else:
-                return output
-        except RuntimeError as error:
-            print(f"Error processing image: {error}")
-            raise
+                # Use provided outscale or default to self.scale
+                target_scale = outscale if outscale is not None else self.scale
+                
+                # SR Process
+                output, _ = self.upsampler.enhance(img, outscale=target_scale)
+                
+                # Post-SR Resize if output_dims is specified
+                if output_dims is not None:
+                    # cv2.resize expects (width, height)
+                    output = cv2.resize(output, output_dims, interpolation=cv2.INTER_LANCZOS4)
+                
+                if output_path:
+                    # Write output
+                    success = cv2.imwrite(output_path, output)
+                    if not success:
+                        raise RuntimeError(f"cv2.imwrite returned False for {output_path}")
+                    
+                    # Validation
+                    if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+                        raise RuntimeError(f"Output file {output_path} is missing or empty")
+                        
+                    return None
+                else:
+                    return output
+                    
+            except Exception as e:
+                last_error = e
+                # print(f"Attempt {attempt+1}/{max_retries} failed for image processing: {e}")
+                if attempt < max_retries - 1:
+                    import time
+                    time.sleep(0.5) # Short backoff
+                else:
+                    print(f"Error processing image after {max_retries} attempts: {e}")
+                    raise last_error
 
     def process_batch(self, input_paths, output_paths, max_workers=4, outscale=None, output_dims_list=None, progress_callback=None):
         """

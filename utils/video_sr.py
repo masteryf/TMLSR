@@ -171,14 +171,15 @@ class VideoSRProcessor:
             
             missing_count = 0
             for i, out_f in enumerate(outputs):
-                if not os.path.exists(out_f):
+                # Check for existence and valid size
+                if not os.path.exists(out_f) or os.path.getsize(out_f) == 0:
                     missing_count += 1
                     # print(f"Warning: Frame {os.path.basename(out_f)} missing. Repairing...")
                     
                     # Strategy: Copy previous > Next > Sample
-                    if i > 0 and os.path.exists(outputs[i-1]):
+                    if i > 0 and os.path.exists(outputs[i-1]) and os.path.getsize(outputs[i-1]) > 0:
                          shutil.copy2(outputs[i-1], out_f)
-                    elif i < len(outputs) - 1 and os.path.exists(outputs[i+1]):
+                    elif i < len(outputs) - 1 and os.path.exists(outputs[i+1]) and os.path.getsize(outputs[i+1]) > 0:
                          shutil.copy2(outputs[i+1], out_f)
                     else:
                          shutil.copy2(sample_frame_path, out_f)
