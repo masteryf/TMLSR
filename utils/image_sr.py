@@ -3,6 +3,7 @@ import cv2
 import torch
 import numpy as np
 import threading
+import queue
 from concurrent.futures import ThreadPoolExecutor
 from basicsr.archs.rrdbnet_arch import RRDBNet
 # Import from sibling package
@@ -74,16 +75,19 @@ class ImageSRProcessor:
         if not hasattr(self, 'model'):
             self.model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=num_block, num_grow_ch=32, scale=scale)
         
-        self.upsampler = RealESRGANer(
-            scale=scale,
-            model_path=model_path,
-            model=self.model,
-            tile=tile,
-            tile_pad=tile_pad,
-            pre_pad=pre_pad,
-            half=not fp32,
-            gpu_id=gpu_id
-        )
+        self.upsampler_params = {
+            'scale': scale,
+            'model_path': model_path,
+            'model': self.model,
+            'tile': tile,
+            'tile_pad': tile_pad,
+            'pre_pad': pre_pad,
+            'half': not fp32,
+            'gpu_id': gpu_id
+        }
+        
+        self.upsampler = RealESRGANer(**self.upsampler_params)
+        
         # Lock to prevent concurrent inference on the same upsampler instance
         # This prevents race conditions in tiling/buffer management
         self.lock = threading.Lock()
@@ -99,7 +103,7 @@ class ImageSRProcessor:
             torch.cuda.empty_cache()
             torch.cuda.ipc_collect()
 
-    def process_image(self, img_input, output_path=None, outscale=None, output_dims=None):
+    def process_image(self, img_input, output_path=None, outscale=None, output_dims=None, upsampler=None):
         """
         Process a single image with retry mechanism.
         
@@ -108,6 +112,7 @@ class ImageSRProcessor:
             output_path (str): Output path to save the image. If None, returns the image array.
             outscale (float): The intermediate SR upsampling scale. If None, uses model's default scale.
             output_dims (tuple): (width, height) to resize to after SR. If None, no resize.
+            upsampler (RealESRGANer): Optional upsampler instance to use.
             
         Returns:
             np.ndarray: Enhanced image if output_path is None, else None.
@@ -115,6 +120,12 @@ class ImageSRProcessor:
         max_retries = 3
         last_error = None
         
+        # Determine which upsampler to use
+        # If external upsampler is provided, we assume exclusive access (no lock needed)
+        # If using self.upsampler, we use the lock
+        use_default_upsampler = (upsampler is None)
+        current_upsampler = upsampler if upsampler is not None else self.upsampler
+
         for attempt in range(max_retries):
             try:
                 if isinstance(img_input, str):
@@ -128,9 +139,13 @@ class ImageSRProcessor:
                 target_scale = outscale if outscale is not None else self.scale
                 
                 # SR Process
-                # Use lock to ensure thread safety during inference
-                with self.lock:
-                    output, _ = self.upsampler.enhance(img, outscale=target_scale)
+                if use_default_upsampler:
+                    # Use lock to ensure thread safety during inference for shared upsampler
+                    with self.lock:
+                        output, _ = current_upsampler.enhance(img, outscale=target_scale)
+                else:
+                    # No lock needed for exclusive upsampler instance
+                    output, _ = current_upsampler.enhance(img, outscale=target_scale)
                 
                 # Post-SR Resize if output_dims is specified
                 if output_dims is not None:
@@ -191,19 +206,51 @@ class ImageSRProcessor:
         if progress_callback:
             progress_callback(0, total_tasks)
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [
-                executor.submit(self.process_image, inp, out, outscale, dims) 
-                for inp, out, dims in tasks
-            ]
-            
-            for i, future in enumerate(futures):
+        # Initialize a pool of upsamplers for parallel processing
+        # This allows each thread to have its own tiling buffers, avoiding race conditions
+        # while sharing the heavy model weights.
+        upsampler_pool = queue.Queue()
+        
+        # Use the main upsampler as one of the workers
+        upsampler_pool.put(self.upsampler)
+        
+        # Create additional upsamplers if needed
+        # We need max_workers instances total
+        extra_upsamplers = []
+        try:
+            for _ in range(max_workers - 1):
+                # Create new RealESRGANer instance sharing the same model
+                new_upsampler = RealESRGANer(**self.upsampler_params)
+                upsampler_pool.put(new_upsampler)
+                extra_upsamplers.append(new_upsampler)
+                
+            def worker_task(inp, out, dims):
+                # Get an upsampler from the pool
+                upsampler = upsampler_pool.get()
                 try:
-                    future.result()
-                    completed_count += 1
-                    if progress_callback:
-                        progress_callback(completed_count, total_tasks)
-                except Exception as e:
-                    print(f"Failed to process {input_paths[i]}: {e}")
+                    self.process_image(inp, out, outscale, dims, upsampler=upsampler)
+                finally:
+                    # Return it to the pool
+                    upsampler_pool.put(upsampler)
+
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [
+                    executor.submit(worker_task, inp, out, dims) 
+                    for inp, out, dims in tasks
+                ]
+                
+                for i, future in enumerate(futures):
+                    try:
+                        future.result()
+                        completed_count += 1
+                        if progress_callback:
+                            progress_callback(completed_count, total_tasks)
+                    except Exception as e:
+                        print(f"Failed to process {input_paths[i]}: {e}")
+        finally:
+            # Cleanup extra upsamplers
+            for upsampler in extra_upsamplers:
+                del upsampler
+            # The main self.upsampler remains in self.upsampler (and was put back in queue but we don't pop it here)
         
         print("Batch processing complete.")
