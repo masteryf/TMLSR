@@ -70,11 +70,11 @@ TMLSR/
 ```bash
 python start_server.py
 ```
-The server will start at `http://0.0.0.0:8000`.
+The server will start at `http://0.0.0.0:6008`.
 
 ### Monitoring Dashboard
 
-Visit `http://localhost:8000/dashboard` to view the server status, active tasks, and system metrics.
+Visit `http://localhost:6008/dashboard` to view the server status, active tasks, and system metrics.
 
 ### API Usage
 

@@ -1,6 +1,6 @@
 # TMLSR API Documentation
 
-Base URL: `http://localhost:8000`
+Base URL: `http://localhost:6008`
 
 ## Endpoints
 
