@@ -58,6 +58,9 @@ TMLSR/
       max_workers: 2      # Number of concurrent SR tasks
       max_retries: 3      # Max retries for failed tasks
       retry_delay: 5      # Seconds to wait before retry
+
+    comfyui:
+      server_address: "http://127.0.0.1:8188" # Address of the ComfyUI server for SeedVR2
     ```
 
 ## Usage
