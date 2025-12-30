@@ -30,4 +30,9 @@ class Settings:
     def retry_delay(self):
         return self._config.get("server", {}).get("retry_delay", 5)
 
+    @property
+    def comfyui_server(self):
+        return self._config.get("comfyui", {}).get("server_address", "http://127.0.0.1:8188")
+
+
 settings = Settings()

@@ -32,8 +32,9 @@ Submit a new super-resolution task for video or image.
 | `outscale` | float | No | The super-resolution scale factor (e.g., 2, 4). Defaults to model scale (usually 4). |
 | `output_magnification` | float | No | The final output magnification relative to the original size. If provided, the result will be resized to this magnification after SR. |
 | `output_dims` | [int, int] | No | Specific output dimensions `[width, height]`. Overrides `output_magnification` if provided. |
+| `resolution` | int | No | Target output height (e.g. 1080). **Only used when model contains "seedvr2".** If provided, it overrides `outscale` and `output_magnification`. |
 
-- **Example Request**:
+- **Example Request (Standard)**:
     ```json
     {
         "url": "https://oss-bucket.aliyuncs.com/input/video.mp4",
@@ -43,6 +44,17 @@ Submit a new super-resolution task for video or image.
     }
     ```
     *Explanation: The video will be upscaled 4x by the model, and then resized to 1.5x of the original resolution.*
+
+- **Example Request (SeedVR2)**:
+    ```json
+    {
+        "url": "http://example.com/image.png",
+        "type": "image",
+        "model": "seedvr2_ema_3b-Q4_K_M.gguf",
+        "resolution": 1080
+    }
+    ```
+    *Explanation: Use SeedVR2 model to upscale image to 1080p height. `outscale` and `output_magnification` are ignored.*
 
 - **Response**:
     ```json

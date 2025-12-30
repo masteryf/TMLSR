@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from .models import TaskCreateRequest, TaskResponse, TaskStatus, TaskStage, TaskOutput, TaskType
 from .config import settings
-from utils import ImageSRProcessor, VideoSRProcessor, OSSHandler
+from utils import ImageSRProcessor, VideoSRProcessor, OSSHandler, SeedVR2Processor
 
 class TaskManager:
     def __init__(self):
@@ -255,7 +255,34 @@ class TaskManager:
             model_name = params.get("model", "realesr-animevideov3.pth")
 
             processor = None
-            if task_type == TaskType.VIDEO:
+            if "seedvr2" in model_name.lower():
+                if task_type == TaskType.IMAGE:
+                    # SeedVR2 for Image
+                    processor = SeedVR2Processor(server_address=settings.comfyui_server, model_name=model_name)
+                    
+                    resolution = params.get("resolution")
+                    dims = None
+                    
+                    # Only calculate dims if resolution is not provided
+                    if resolution is None and output_magnification:
+                        import cv2
+                        img_mat = cv2.imread(local_input)
+                        if img_mat is None:
+                            raise ValueError("Invalid image file")
+                        h, w = img_mat.shape[:2]
+                        dims = (int(w * output_magnification), int(h * output_magnification))
+                        
+                    processor.process_image(
+                        img_input=local_input,
+                        output_path=local_output,
+                        outscale=outscale,
+                        output_dims=dims,
+                        target_height=resolution
+                    )
+                else:
+                    raise NotImplementedError("SeedVR2 video processing not yet supported")
+
+            elif task_type == TaskType.VIDEO:
                 processor = VideoSRProcessor(gpu_id=gpu_id, scale=4) # Default scale 4, overridden by outscale
                 
                 def video_progress(pct, desc):

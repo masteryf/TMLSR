@@ -25,6 +25,7 @@ class TaskCreateRequest(BaseModel):
     audio: bool = True
     gpu_id: int = 0
     model: Optional[str] = Field("realesr-animevideov3.pth", description="Model filename in weights directory")
+    resolution: Optional[int] = Field(None, description="Target output height for SeedVR2 (e.g. 1080). Ignored for other models.")
     
     # Deprecated but kept for compatibility (ignored in logic if not needed, or mapped if possible)
     target: Optional[str] = None 
