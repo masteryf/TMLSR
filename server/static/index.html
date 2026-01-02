@@ -58,6 +58,38 @@
             </div>
         </div>
 
+        <!-- Server Pool Status -->
+        <div class="card shadow-sm mb-4">
+            <div class="card-header bg-white">
+                <h5 class="mb-0">ComfyUI Server Pool</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-4 mb-3" v-for="server in pool_status" :key="server.address">
+                        <div class="card h-100" :class="server.status === 'busy' ? 'border-primary' : 'border-success'">
+                            <div class="card-body">
+                                <h6 class="card-title text-truncate" :title="server.address">
+                                    {{ server.address.replace('https://', '').replace('http://', '').split('/')[0] }}
+                                </h6>
+                                <div class="d-flex justify-content-between align-items-center mt-2">
+                                    <span class="badge" :class="server.status === 'busy' ? 'bg-primary' : 'bg-success'">
+                                        {{ server.status.toUpperCase() }}
+                                    </span>
+                                    <small class="text-muted" v-if="server.last_active">
+                                        Last active: {{ formatTimeDelta(server.last_active) }}
+                                    </small>
+                                </div>
+                                <div class="mt-2" v-if="server.status === 'busy'">
+                                    <small class="text-muted d-block">Processing Task:</small>
+                                    <small class="font-monospace text-primary">{{ server.task_id.substring(0, 8) }}...</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Task List -->
         <div class="card shadow-sm">
             <div class="card-header bg-white">
@@ -206,6 +238,7 @@
             data() {
                 return {
                     system: { max_workers: 0, active_workers: 0, queue_size: 0 },
+                    pool_status: [],
                     stats: { completed: 0, failed: 0 },
                     tasks: [],
                     lastUpdated: '-',
@@ -219,6 +252,7 @@
                     try {
                         const res = await axios.get('/monitor/stats');
                         this.system = res.data.system;
+                        this.pool_status = res.data.pool_status || [];
                         this.stats = res.data.stats;
                         this.tasks = res.data.tasks;
                         this.lastUpdated = new Date().toLocaleTimeString();
@@ -247,6 +281,13 @@
                 formatTime(isoStr) {
                     if (!isoStr) return '-';
                     return new Date(isoStr).toLocaleString();
+                },
+                formatTimeDelta(timestamp) {
+                    const now = Date.now() / 1000;
+                    const delta = now - timestamp;
+                    if (delta < 60) return `${Math.round(delta)}s ago`;
+                    if (delta < 3600) return `${Math.round(delta / 60)}m ago`;
+                    return `${Math.round(delta / 3600)}h ago`;
                 },
                 async cancelTask(taskId) {
                     if (!confirm('Are you sure you want to cancel this task?')) return;

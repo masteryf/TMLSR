@@ -1,0 +1,15 @@
+oss:
+  endpoint: "oss-cn-hongkong.aliyuncs.com"
+  access_key_id: "your_access_key_id"
+  access_key_secret: "your_access_key_secret"
+  bucket_name: "your_bucket_name"
+
+server:
+  # max_workers: 2 # Now dynamically set based on server count
+  max_retries: 3
+  retry_delay: 5
+
+comfyui:
+  servers:
+    - "http://127.0.0.1:8188"
+    # - "https://your-remote-comfyui-server.com"

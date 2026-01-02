@@ -31,8 +31,17 @@ class Settings:
         return self._config.get("server", {}).get("retry_delay", 5)
 
     @property
-    def comfyui_server(self):
-        return self._config.get("comfyui", {}).get("server_address", "http://127.0.0.1:8188")
+    def comfyui_servers(self):
+        # Return list of servers. Fallback to single server_address if servers list not present
+        comfy = self._config.get("comfyui", {})
+        servers = comfy.get("servers", [])
+        if not servers:
+            addr = comfy.get("server_address")
+            if addr:
+                servers = [addr]
+            else:
+                servers = ["http://127.0.0.1:8188"]
+        return servers
 
 
 settings = Settings()

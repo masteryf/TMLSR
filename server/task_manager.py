@@ -12,7 +12,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 from .models import TaskCreateRequest, TaskResponse, TaskStatus, TaskStage, TaskOutput, TaskType
 from .config import settings
-from utils import ImageSRProcessor, VideoSRProcessor, OSSHandler, SeedVR2Processor
+from utils import OSSHandler
+from utils.comfy_pool import ComfyAPIPool
 
 class TaskManager:
     def __init__(self):
@@ -20,13 +21,12 @@ class TaskManager:
         self.queue = queue.Queue()
         self.lock = threading.Lock()
         
-        # Initialize processors lazily or globally?
-        # To support concurrency, we might need a pool of processors or rely on the processor's internal handling.
-        # Since SR is GPU heavy, we should limit the number of concurrent SR tasks.
-        self.max_workers = settings.max_workers
-        self.semaphore = threading.Semaphore(self.max_workers)
+        # Use server count as concurrency limit as requested
+        self.max_workers = len(settings.comfyui_servers)
+        self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
         
         self.oss_handler = OSSHandler()
+        self.comfy_pool = ComfyAPIPool(settings.comfyui_servers)
         
         # Start worker thread
         self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
@@ -126,6 +126,7 @@ class TaskManager:
                     "active_workers": status_counts[TaskStatus.PROCESSING], # Approximation
                     "queue_size": self.queue.qsize()
                 },
+                "pool_status": self.comfy_pool.get_status(),
                 "stats": status_counts,
                 "tasks": recent_tasks
             }
@@ -148,10 +149,19 @@ class TaskManager:
         while True:
             try:
                 task_id = self.queue.get()
-                self._process_task_wrapper(task_id)
-                self.queue.task_done()
+                # Submit task to thread pool for concurrent execution
+                self.executor.submit(self._run_task_async, task_id)
             except Exception as e:
                 print(f"Worker loop error: {e}")
+
+    def _run_task_async(self, task_id):
+        """Wrapper to run task and mark queue item as done."""
+        try:
+            self._process_task_wrapper(task_id)
+        except Exception as e:
+            print(f"Async task execution error for {task_id}: {e}")
+        finally:
+            self.queue.task_done()
 
     def _process_task_wrapper(self, task_id):
         # Check if canceled
@@ -222,14 +232,45 @@ class TaskManager:
         os.makedirs(temp_dir, exist_ok=True)
         
         input_url = str(params["url"])
-        task_type = params.get("type", TaskType.VIDEO)
         
+        # Determine Workflow Name
+        workflow_name = params.get("workflow")
+        model_name = params.get("model")
+        
+        if not workflow_name:
+            if model_name:
+                if "seedvr2" in model_name.lower():
+                    workflow_name = "SeedVR2Defeat"
+                else:
+                    workflow_name = "ESRGANDefeat"
+            else:
+                 workflow_name = "ESRGANDefeat" # Default
+                 
+        workflow_path = os.path.join(os.getcwd(), "workflows", f"{workflow_name}.json")
+        if not os.path.exists(workflow_path):
+             # Fallback check
+             if os.path.exists(os.path.join(os.getcwd(), "workflows", f"{workflow_name}")):
+                 workflow_path = os.path.join(os.getcwd(), "workflows", f"{workflow_name}")
+             else:
+                 raise FileNotFoundError(f"Workflow file not found: {workflow_name}")
+
         try:
             # 1. Download
             start_time = time.time()
             self._update_stage(task_id, "download", "running", progress=0, detail="Starting download...")
             
-            local_input_filename = "input_video.mp4" if task_type == TaskType.VIDEO else "input_image.png"
+            # Use extension from url or default based on type
+            ext = os.path.splitext(input_url.split("?")[0])[1]
+            if not ext:
+                ext = ".mp4" if params.get("type") == TaskType.VIDEO else ".png"
+            
+            # Use original filename to avoid potential conflicts or node validation issues
+            original_basename = os.path.basename(input_url.split("?")[0])
+            if not original_basename or len(original_basename) > 200: # Basic safety
+                 local_input_filename = f"input{ext}"
+            else:
+                 local_input_filename = original_basename
+
             local_input = os.path.join(temp_dir, local_input_filename)
             
             print(f"Downloading {input_url} to {local_input}...")
@@ -244,81 +285,15 @@ class TaskManager:
             
             # 2. Process
             start_time = time.time()
-            self._update_stage(task_id, "process", "running", progress=0, detail="Initializing...")
+            self._update_stage(task_id, "process", "running", progress=0, detail=f"Processing with {workflow_name}...")
             
-            local_output_filename = "output_video.mp4" if task_type == TaskType.VIDEO else "output_image.png"
-            local_output = os.path.join(temp_dir, local_output_filename)
+            output_paths = self.comfy_pool.process_task(workflow_path, local_input, temp_dir, task_id=task_id)
             
-            outscale = params.get("outscale")
-            output_magnification = params.get("output_magnification")
-            gpu_id = params.get("gpu_id", 0)
-            model_name = params.get("model", "realesr-animevideov3.pth")
-
-            processor = None
-            if "seedvr2" in model_name.lower():
-                if task_type == TaskType.IMAGE:
-                    # SeedVR2 for Image
-                    processor = SeedVR2Processor(server_address=settings.comfyui_server, model_name=model_name)
-                    
-                    resolution = params.get("resolution")
-                    dims = None
-                    
-                    # Only calculate dims if resolution is not provided
-                    if resolution is None and output_magnification:
-                        import cv2
-                        img_mat = cv2.imread(local_input)
-                        if img_mat is None:
-                            raise ValueError("Invalid image file")
-                        h, w = img_mat.shape[:2]
-                        dims = (int(w * output_magnification), int(h * output_magnification))
-                        
-                    processor.process_image(
-                        img_input=local_input,
-                        output_path=local_output,
-                        outscale=outscale,
-                        output_dims=dims,
-                        target_height=resolution
-                    )
-                else:
-                    raise NotImplementedError("SeedVR2 video processing not yet supported")
-
-            elif task_type == TaskType.VIDEO:
-                processor = VideoSRProcessor(gpu_id=gpu_id, scale=4) # Default scale 4, overridden by outscale
-                
-                def video_progress(pct, desc):
-                    self._update_stage(task_id, "process", "running", progress=round(pct, 1), detail=desc)
-                
-                processor.process_video(
-                    input_path=local_input,
-                    output_path=local_output,
-                    outscale=outscale,
-                    output_magnification=output_magnification,
-                    keep_audio=params.get("audio", True),
-                    progress_callback=video_progress
-                )
-            else:
-                processor = ImageSRProcessor(gpu_id=gpu_id, scale=4, model_path=model_name)
-                # Parse output_dims from magnification if needed
-                dims = None
-                if output_magnification:
-                    # Actually we have local file now
-                    import cv2
-                    img_mat = cv2.imread(local_input)
-                    if img_mat is None:
-                        raise ValueError("Invalid image file")
-                    h, w = img_mat.shape[:2]
-                    dims = (int(w * output_magnification), int(h * output_magnification))
-                
-                processor.process_image(
-                    img_input=local_input,
-                    output_path=local_output,
-                    outscale=outscale,
-                    output_dims=dims
-                )
+            if not output_paths:
+                raise RuntimeError("Workflow produced no output files")
             
-            # Explicit cleanup after processing
-            if processor:
-                processor.cleanup()
+            local_output = output_paths[0] # Take the first output
+            local_output_filename = os.path.basename(local_output)
 
             self._update_stage(task_id, "process", "success", duration=time.time() - start_time, progress=100, detail="Processing complete")
             
@@ -337,7 +312,7 @@ class TaskManager:
             if not success:
                 raise RuntimeError("Failed to upload to OSS")
                 
-            # Construct OSS URL (Assuming public read or we need to generate signed url)
+            # Construct OSS URL
             bucket_name = self.oss_handler.config['bucket_name']
             endpoint = self.oss_handler.config['endpoint']
             if not endpoint.startswith("http"):
@@ -360,9 +335,13 @@ class TaskManager:
             if os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
 
+
     def _download_file(self, url, local_path, progress_callback=None):
         if url.startswith("http"):
-            with requests.get(url, stream=True) as r:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+            }
+            with requests.get(url, stream=True, headers=headers) as r:
                 r.raise_for_status()
                 total_length = r.headers.get('content-length')
                 

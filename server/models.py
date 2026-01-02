@@ -16,16 +16,13 @@ class TaskType(str, Enum):
 class TaskCreateRequest(BaseModel):
     url: str = Field(..., description="HTTP URL or file path")
     type: TaskType = TaskType.VIDEO
-    outscale: Optional[float] = Field(None, description="Intermediate SR upsampling scale. e.g. 4")
-    output_magnification: Optional[float] = Field(None, description="Final output scale relative to original. e.g. 1.5")
+    model: Optional[str] = Field(None, description="Workflow name (e.g. SeedVR2Defeat) or legacy model name")
+    workflow: Optional[str] = Field(None, description="Workflow name to use. Overrides model.")
     
-    # Optional parameters for compatibility or advanced tuning
-    vcodec: Optional[str] = "libx264"
-    acodec: Optional[str] = "aac"
-    audio: bool = True
-    gpu_id: int = 0
-    model: Optional[str] = Field("realesr-animevideov3.pth", description="Model filename in weights directory")
-    resolution: Optional[int] = Field(None, description="Target output height for SeedVR2 (e.g. 1080). Ignored for other models.")
+    # Deprecated fields
+    outscale: Optional[float] = Field(None, description="Deprecated. Use workflow settings.")
+    output_magnification: Optional[float] = Field(None, description="Deprecated. Use workflow settings.")
+    resolution: Optional[int] = Field(None, description="Deprecated. Use workflow settings.")
     
     # Deprecated but kept for compatibility (ignored in logic if not needed, or mapped if possible)
     target: Optional[str] = None 
